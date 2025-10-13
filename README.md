@@ -77,3 +77,24 @@ Go live (get a stream key placeholder):
 curl -X POST -H "Content-Type: application/json" -d '{"user":"bob"}' http://localhost:3000/api/live/start
 ```
 
+Advanced features (implemented in scaffold)
+
+- Tagging: posts accept a `tags` array and `mentions` array (usernames) in the POST body.
+- Group chats: SSE chat supports a `room` query parameter. Examples:
+
+	- Open room stream:
+		curl "http://localhost:3000/api/chat/stream?room=grief-group-1"
+	- Send to room:
+		curl -X POST -H "Content-Type: application/json" -d '{"user":"bob","message":"hi group"}' "http://localhost:3000/api/chat/send?room=grief-group-1"
+
+PWA & background music
+
+- A simple `manifest.json` is included. You can add `music.mp3` at `/public/music.mp3` and users can toggle background music from the UI.
+
+Mobile packaging to Play Store / App Store
+
+- Packaging a web app for mobile stores typically requires a wrapper (e.g., Capacitor, Cordova, or a native shell). This scaffold is the web backend + frontend foundation. If you want, I can:
+	- Create a Capacitor project and configure Android/iOS builds, or
+	- Generate a Progressive Web App (PWA) build and provide guidance to publish to Play Store as a Trusted Web Activity (TWA).
+
+

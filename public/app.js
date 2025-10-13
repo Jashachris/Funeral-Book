@@ -18,6 +18,16 @@ document.addEventListener('DOMContentLoaded', () => {
     load();
   });
 
+  // background music toggle
+  const musicToggle = document.getElementById('musicToggle');
+  const bgMusic = document.getElementById('bgMusic');
+  if (musicToggle && bgMusic) {
+    musicToggle.addEventListener('click', () => {
+      if (bgMusic.paused) { bgMusic.play().catch(()=>{}); musicToggle.textContent = 'Pause background music'; }
+      else { bgMusic.pause(); musicToggle.textContent = 'Play background music'; }
+    });
+  }
+
   function escapeHtml(s) { return String(s).replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;', '"':'&quot;'}[c])); }
 
   load();

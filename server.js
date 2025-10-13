@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -35,6 +36,41 @@ function sendJson(res, obj, code = 200) {
   res.end(body);
 }
 
+// simple password hashing using pbkdf2
+function hashPassword(password) {
+  const salt = crypto.randomBytes(12).toString('hex');
+  const derived = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256').toString('hex');
+  return `${salt}$${derived}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, derived] = stored.split('$');
+  if (!salt || !derived) return false;
+  const check = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256').toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(check, 'hex'), Buffer.from(derived, 'hex'));
+}
+
+// simple signed token: base64(payload).hexsig
+const TOKEN_SECRET = process.env.TOKEN_SECRET || 'dev-secret-change-me';
+function signToken(payloadObj, expiresInSec = 60*60*24) {
+  const exp = Math.floor(Date.now()/1000) + expiresInSec;
+  const payload = Object.assign({}, payloadObj, { exp });
+  const payloadB = Buffer.from(JSON.stringify(payload)).toString('base64');
+  const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payloadB).digest('hex');
+  return `${payloadB}.${sig}`;
+}
+
+function verifyToken(token) {
+  try {
+    const [payloadB, sig] = token.split('.');
+    const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(payloadB).digest('hex');
+    if (!sig || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const payload = JSON.parse(Buffer.from(payloadB, 'base64').toString('utf8'));
+    if (payload.exp && Math.floor(Date.now()/1000) > payload.exp) return null;
+    return payload;
+  } catch (e) { return null; }
+}
+
 function serveStatic(req, res) {
   let p = req.url.split('?')[0];
   if (p === '/' ) p = '/index.html';
@@ -52,11 +88,12 @@ function serveStatic(req, res) {
 }
 
 // SSE clients for chat
-const sseClients = [];
+const sseClients = {}; // map room -> [res]
 
-function broadcastEvent(event, data) {
+function broadcastEvent(room, event, data) {
   const payload = `data: ${JSON.stringify(data)}\n\n`;
-  sseClients.forEach(sres => {
+  const clients = sseClients[room] || [];
+  clients.forEach(sres => {
     try { sres.write(payload); } catch (e) {}
   });
 }
@@ -65,11 +102,10 @@ function getUserFromAuth(req) {
   const auth = req.headers['authorization'] || '';
   if (!auth.startsWith('Bearer ')) return null;
   const token = auth.slice(7);
+  const payload = verifyToken(token);
+  if (!payload || !payload.userId) return null;
   const db = readData();
-  const sess = db.sessions.find(s => s.token === token);
-  if (!sess) return null;
-  const user = db.users.find(u => u.id === sess.userId);
-  return user || null;
+  return db.users.find(u => u.id === payload.userId) || null;
 }
 
 const server = http.createServer((req, res) => {
@@ -179,7 +215,7 @@ const server = http.createServer((req, res) => {
           const db = readData();
           if (db.users.find(u => u.username === obj.username)) return sendJson(res, { error: 'username taken' }, 409);
           const id = (db.users.reduce((m, u) => Math.max(m, u.id || 0), 0) || 0) + 1;
-          const user = { id, username: obj.username, password: obj.password, createdAt: new Date().toISOString() };
+          const user = { id, username: obj.username, password: hashPassword(obj.password), createdAt: new Date().toISOString() };
           db.users.push(user);
           writeData(db);
           return sendJson(res, { id: user.id, username: user.username, createdAt: user.createdAt }, 201);
@@ -197,11 +233,9 @@ const server = http.createServer((req, res) => {
         try {
           const obj = JSON.parse(body || '{}');
           const db = readData();
-          const user = db.users.find(u => u.username === obj.username && u.password === obj.password);
-          if (!user) return sendJson(res, { error: 'invalid credentials' }, 401);
-          const token = require('crypto').randomBytes(16).toString('hex');
-          db.sessions.push({ token, userId: user.id, createdAt: new Date().toISOString() });
-          writeData(db);
+          const user = db.users.find(u => u.username === obj.username);
+          if (!user || !verifyPassword(obj.password, user.password)) return sendJson(res, { error: 'invalid credentials' }, 401);
+          const token = signToken({ userId: user.id }, 60*60*24*7); // 7 days
           return sendJson(res, { token });
         } catch (e) { return sendJson(res, { error: 'invalid json' }, 400); }
       });
@@ -227,7 +261,10 @@ const server = http.createServer((req, res) => {
           if (!obj.title && !obj.body) return sendJson(res, { error: 'title or body required' }, 400);
           const db = readData();
           const id = (db.posts.reduce((m, p) => Math.max(m, p.id || 0), 0) || 0) + 1;
-          const post = { id, userId: user.id, title: obj.title || '', body: obj.body || '', videoUrl: obj.videoUrl || '', createdAt: new Date().toISOString() };
+          // support tags array and mentions (['@alice'])
+          const tags = Array.isArray(obj.tags) ? obj.tags.slice(0,10) : [];
+          const mentions = Array.isArray(obj.mentions) ? obj.mentions.slice(0,10) : [];
+          const post = { id, userId: user.id, title: obj.title || '', body: obj.body || '', videoUrl: obj.videoUrl || '', tags, mentions, createdAt: new Date().toISOString() };
           db.posts.push(post);
           writeData(db);
           return sendJson(res, post, 201);
@@ -238,13 +275,14 @@ const server = http.createServer((req, res) => {
 
     // ===== chat endpoints (SSE + send) =====
     if (resource === 'chat' && req.method === 'GET' && maybeId === 'stream') {
-      // SSE
+      // SSE with optional room query param
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const room = url.searchParams.get('room') || 'global';
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       res.write('\n');
-      sseClients.push(res);
-      req.on('close', () => {
-        const i = sseClients.indexOf(res); if (i !== -1) sseClients.splice(i, 1);
-      });
+      sseClients[room] = sseClients[room] || [];
+      sseClients[room].push(res);
+      req.on('close', () => { const i = sseClients[room].indexOf(res); if (i !== -1) sseClients[room].splice(i, 1); });
       return;
     }
 
@@ -256,11 +294,13 @@ const server = http.createServer((req, res) => {
         try {
           const obj = JSON.parse(body || '{}');
           if (!obj.user || !obj.message) return sendJson(res, { error: 'user and message required' }, 400);
+          const url = new URL(req.url, `http://${req.headers.host}`);
+          const room = url.searchParams.get('room') || 'global';
           const db = readData();
-          const msg = { id: (db.chat.reduce((m, x) => Math.max(m, x.id || 0), 0) || 0) + 1, user: obj.user, message: obj.message, createdAt: new Date().toISOString() };
+          const msg = { id: (db.chat.reduce((m, x) => Math.max(m, x.id || 0), 0) || 0) + 1, user: obj.user, message: obj.message, room, createdAt: new Date().toISOString() };
           db.chat.push(msg);
           writeData(db);
-          broadcastEvent('message', msg);
+          broadcastEvent(room, 'message', msg);
           return sendJson(res, msg, 201);
         } catch (e) { return sendJson(res, { error: 'invalid json' }, 400); }
       });

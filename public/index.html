@@ -5,11 +5,16 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Funeral Book</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="manifest" href="/manifest.json">
   <script defer src="/app.js"></script>
 </head>
 <body>
   <main>
     <h1>Funeral Book</h1>
+    <div style="margin-bottom:10px">
+      <button id="musicToggle">Play background music</button>
+      <audio id="bgMusic" loop src="/music.mp3"></audio>
+    </div>
     <form id="form">
       <input id="name" placeholder="Name" required />
       <input id="note" placeholder="Note (optional)" />
