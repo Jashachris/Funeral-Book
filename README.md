@@ -42,3 +42,38 @@ docker build -t funeral-book .
 docker run -p 3000:3000 funeral-book
 ```
 
+
+Examples
+
+Register / Login (placeholder endpoints — not implemented in scaffold yet):
+
+```bash
+# register (example)
+curl -X POST -H "Content-Type: application/json" -d '{"username":"bob","password":"secret"}' http://localhost:3000/api/users/register
+
+# login -> returns a token
+curl -X POST -H "Content-Type: application/json" -d '{"username":"bob","password":"secret"}' http://localhost:3000/api/users/login
+```
+
+Create a post (attach a video URL):
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"title":"In loving memory","body":"A short message","videoUrl":"https://..."}' http://localhost:3000/api/posts
+```
+
+Instant messaging (SSE client):
+
+```bash
+# Open a live SSE stream in terminal
+curl http://localhost:3000/api/chat/stream
+
+# Send a chat message
+curl -X POST -H "Content-Type: application/json" -d '{"user":"bob","message":"hello"}' http://localhost:3000/api/chat/send
+```
+
+Go live (get a stream key placeholder):
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"user":"bob"}' http://localhost:3000/api/live/start
+```
+
