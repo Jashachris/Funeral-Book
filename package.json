@@ -1,0 +1,12 @@
+{
+  "name": "funeral-book",
+  "version": "0.1.0",
+  "description": "Minimal funeral record book HTTP app (zero-dependency)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/test.js"
+  },
+  "author": "",
+  "license": "MIT"
+}
