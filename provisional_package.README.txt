@@ -1,0 +1,15 @@
+This repository includes provisional patent materials in the `patent/` folder.
+
+Files included:
+- PROVISIONAL_DRAFT.md
+- INVENTOR_ASSIGNMENT.md
+- FILING_INSTRUCTIONS.md
+- CLAIMS.md
+- COVER_SHEET.md
+- EMAIL_TO_ATTORNEY.md
+- SEARCH_QUERIES.md
+- PACKAGE_INSTRUCTIONS.md
+
+To create a ZIP package locally (if you prefer), run:
+
+zip -r provisional_package.zip patent/

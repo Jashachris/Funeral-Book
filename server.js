@@ -668,10 +668,12 @@ const server = http.createServer((req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));
+// initialize adapter asynchronously (won't block server start)
 initDbAdapter().then(() => {
-  server.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));
-}).catch(() => {
-  server.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));
+  console.log('dbAdapter ready (post-start):', dbAdapter.available());
+}).catch((e) => {
+  console.log('dbAdapter init failed (post-start):', e && e.message);
 });
 
 module.exports = server;
