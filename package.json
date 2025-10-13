@@ -1,22 +1,19 @@
 {
   "name": "funeral-book",
   "version": "0.1.0",
-  "description": "Minimal funeral record book HTTP app (zero-dependency)",
-  "main": "server.js",
+  "private": true,
   "scripts": {
-    "start": "node server.js",
-    "test": "node test/test.js",
-    "share": "node scripts/share.js"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
   },
-  "author": "",
-  "license": "MIT",
   "dependencies": {
-    "marked": "^4.3.0",
-    "sql.js": "^1.8.0"
+    "next": "14.x",
+    "react": "18.x",
+    "react-dom": "18.x"
   },
-  "directories": {
-    "lib": "lib",
-    "test": "test"
-  },
-  "keywords": []
+  "devDependencies": {
+    "eslint": "8.x"
+  }
 }
