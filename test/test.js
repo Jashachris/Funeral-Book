@@ -20,7 +20,8 @@ function req(opts, body) {
 
 (async ()=>{
   // reset data
-  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {} }));
+  // reset data.json for compatibility
+  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [] }));
 
   // register user
   let r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'bob', password: 'secret' }));
@@ -70,6 +71,61 @@ function req(opts, body) {
   assert.strictEqual(r.statusCode, 201, 'create post should return 201');
   const post = JSON.parse(r.body);
   assert.strictEqual(post.title, 'Hello');
+
+  // create a private user alice
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'alice', password: 'pw', private: true }));
+  assert.strictEqual(r.statusCode, 201, 'register alice should return 201');
+  const alice = JSON.parse(r.body);
+
+  // bob requests to follow alice
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/follow/request', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ targetId: alice.id }));
+  assert.ok(r.statusCode === 201 || r.statusCode === 200, 'follow request should return 201 or 200');
+  const fr = JSON.parse(r.body);
+  let requestId = fr.requestId || null;
+  if (!requestId && fr.requested) {
+    // find request id from data file
+    const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+    const reqObj = data.followRequests.find(f => f.from === 1 && f.to === alice.id);
+    requestId = reqObj && reqObj.id;
+  }
+
+  // login as alice
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/users/login', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'alice', password: 'pw' }));
+  assert.strictEqual(r.statusCode, 200, 'alice login should return 200');
+  const aliceToken = JSON.parse(r.body).token;
+
+  // alice approves follow request
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/follow/approve', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${aliceToken}` } }, JSON.stringify({ requestId }));
+  assert.strictEqual(r.statusCode, 200, 'approve should return 200');
+
+  // bob can now see alice private posts (create one as alice then fetch as bob)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/posts', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${aliceToken}` } }, JSON.stringify({ title: 'Private note', body: 'Only followers' }));
+  assert.strictEqual(r.statusCode, 201, 'alice create private post should return 201');
+  const priv = JSON.parse(r.body);
+
+  // bob fetch posts (auth)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/posts', method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+  assert.strictEqual(r.statusCode, 200, 'GET posts should return 200');
+  const posts = JSON.parse(r.body);
+  const found = posts.find(p => p.id === priv.id);
+  assert.ok(found, 'bob should see alice private post after approve');
+
+  // bob reports alice
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/report', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ targetUserId: alice.id, categories: ['harassment'], detail: 'abusive' }));
+  assert.strictEqual(r.statusCode, 201, 'report should return 201');
+  const report = JSON.parse(r.body);
+
+  // admin suspends alice
+  // first, promote bob to admin using adminSecret
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/admin/promote', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ adminSecret: 'admin-secret', targetUserId: 1 }));
+  assert.strictEqual(r.statusCode, 200, 'promote should return 200');
+
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/admin/reports', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ action: 'suspend', reportId: report.id }));
+  assert.strictEqual(r.statusCode, 200, 'admin suspend should return 200');
+
+  // alice now cannot create posts
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/posts', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${aliceToken}` } }, JSON.stringify({ title: 'Nope', body: 'suspended' }));
+  assert.strictEqual(r.statusCode, 403, 'suspended user cannot post');
 
   // send chat message
   r = await req({ hostname: 'localhost', port: 3000, path: '/api/chat/send', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ user: 'bob', message: 'hi all' }));

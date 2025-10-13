@@ -33,6 +33,74 @@ API
 - PUT /api/records/:id — update fields (JSON body, { name?, note? })
 - DELETE /api/records/:id — delete a record
 
+Moderation & privacy
+
+- Registration supports public or private accounts. When creating a user you can include the optional `private` boolean in the register payload. Example:
+
+```bash
+# create a private account
+curl -X POST -H "Content-Type: application/json" \
+	-d '{"username":"alice","password":"secret","private":true}' \
+	http://localhost:3000/api/users
+```
+
+- Blocking users
+
+	- POST /api/users/block — authenticated. JSON body: { "targetId": 123 }
+		- Returns: { "blocked": true }
+	- POST /api/users/unblock — authenticated. JSON body: { "targetId": 123 }
+		- Returns: { "blocked": false }
+
+	Example (block user id 2):
+
+```bash
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+	-d '{"targetId":2}' http://localhost:3000/api/users/block
+```
+
+- Reporting abusive users
+
+	- POST /api/report — authenticated. JSON body: { "targetUserId": 123, "categories": ["harassment","sexism"], "detail": "optional text" }
+		- Allowed categories: harassment, bullying, sexism, racism, derogatory, hate
+		- Returns: { "reported": true, "id": <reportId> }
+
+Share the app globally
+
+If you want to let people worldwide access a local development instance quickly, there's a simple command added:
+
+```bash
+# start and expose the app (uses ngrok if NGROK_AUTH_TOKEN set, otherwise localtunnel via npx)
+npm run share
+```
+
+Notes:
+- `npm run share` will start the server (if not already running) and attempt to expose it using `npx ngrok` (preferred) or `npx localtunnel` as a fallback.
+- To use ngrok without interactive login, set `NGROK_AUTH_TOKEN` in your environment:
+
+```bash
+export NGROK_AUTH_TOKEN=your_token_here
+npm run share
+```
+
+If you prefer another tunnel provider I can add direct integrations (e.g., Cloudflare Tunnel, Serveo) or produce a Docker deployment for cloud hosting.
+	Example:
+
+```bash
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+	-d '{"targetUserId":2,"categories":["harassment"],"detail":"Repeated insults"}' \
+	http://localhost:3000/api/report
+```
+
+- How privacy and moderation are handled
+
+	- Private accounts: posts created by users with `private: true` are only visible to the account owner (requests authenticated as that user). `GET /api/posts` will filter private users' posts unless you are the owner.
+	- Blocking: a blocker record is stored in `data.json` under `blocks`. Currently blocking is recorded but only post visibility is impacted via the privacy model; enforcement in chat and other surfaces can be added later.
+	- Reporting: reports are stored in `data.json` under `reports`. In production you'd forward reports to a moderation workflow, rate-limit submissions, and add admin endpoints for review.
+
+Notes
+
+- The moderation features are intentionally lightweight and stored in `data.json`. For production use consider moving reports and blocks to a proper database, adding rate limits, notification hooks for moderators, and stronger enforcement of blocks across chat and profile endpoints.
+
 Docker
 
 Build and run with Docker:
