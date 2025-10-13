@@ -15,7 +15,10 @@ function readData() {
 }
 
 function writeData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  // atomic write: write to temp file then rename
+  const tmp = DATA_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(tmp, DATA_FILE);
 }
 
 function sendJson(res, obj, code = 200) {
@@ -69,8 +72,16 @@ const server = http.createServer((req, res) => {
 
     // POST /api/records
     if (req.method === 'POST' && !maybeId) {
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
       let body = '';
-      req.on('data', chunk => body += chunk);
+      let length = 0;
+      req.on('data', chunk => {
+        length += chunk.length;
+        if (length > 1_000_000) { // 1MB limit
+          res.writeHead(413); res.end('Payload too large'); req.connection.destroy(); return;
+        }
+        body += chunk;
+      });
       req.on('end', () => {
         try {
           const obj = JSON.parse(body || '{}');
@@ -92,8 +103,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'PUT' && maybeId) {
       const id = Number(maybeId);
       if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
       let body = '';
-      req.on('data', chunk => body += chunk);
+      let length = 0;
+      req.on('data', chunk => {
+        length += chunk.length;
+        if (length > 1_000_000) { res.writeHead(413); res.end('Payload too large'); req.connection.destroy(); return; }
+        body += chunk;
+      });
       req.on('end', () => {
         try {
           const obj = JSON.parse(body || '{}');

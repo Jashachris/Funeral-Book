@@ -24,3 +24,21 @@ Files added in this scaffold:
 Notes
 
 This scaffold intentionally avoids external dependencies for simplicity. It's suitable for local demos and as a starting point.
+
+API
+
+- GET /api/records — list all records
+- GET /api/records/:id — get a single record by id
+- POST /api/records — create a record (JSON body, { name, note? })
+- PUT /api/records/:id — update fields (JSON body, { name?, note? })
+- DELETE /api/records/:id — delete a record
+
+Docker
+
+Build and run with Docker:
+
+```bash
+docker build -t funeral-book .
+docker run -p 3000:3000 funeral-book
+```
+
