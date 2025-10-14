@@ -2,6 +2,23 @@
 
 Minimal zero-dependency Node.js app to store simple funeral records.
 
+## 📖 Product Development Plan
+
+For comprehensive product planning documentation, see:
+- **[PRODUCT_PLAN.md](PRODUCT_PLAN.md)** - Complete product development plan (mission, personas, features, tech stack, go-to-market strategy)
+- **[Quick Start Guide](docs/QUICK_START_GUIDE.md)** - Quick reference for navigating the product plan
+
+The product plan includes:
+- Mission statement and user personas
+- Privacy & permanence policy
+- MVP and post-MVP feature roadmap
+- Design & UX guidelines with accessibility requirements
+- Tech stack options (fast startup vs. scalable)
+- 8-sprint build plan with detailed tasks
+- Legal, safety, and moderation requirements
+- Go-to-market and monetization strategy
+- 90-day detailed timeline
+
 Quick start
 
 1. Install Node.js (>=12). Then start the server:
