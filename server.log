@@ -1,0 +1,4 @@
+HTTP server listening on http://localhost:3000
+HTTPS server listening on https://localhost:3443
+dbAdapter initialized, sql.js available: true
+dbAdapter ready (post-start): true

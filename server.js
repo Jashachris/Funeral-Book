@@ -2,9 +2,11 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const Busboy = require('busboy');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const dbAdapter = require('./lib/dbAdapter');
 // keep simple JSON-backed DB in data.json
 // delegate to adapter (sql.js WASM when available, else JSON file)
@@ -23,7 +25,7 @@ function writeData(data) { return dbAdapter.writeData(data); }
 function createRecord(name, note) {
   const db = readData();
   const id = (db.records.reduce((m, r) => Math.max(m, r.id || 0), 0) || 0) + 1;
-  const rec = { id, name, note: note || '', createdAt: new Date().toISOString() };
+  const rec = { id, name, note: note || '', mediaUrl: null, createdAt: new Date().toISOString() };
   db.records.push(rec);
   writeData(db);
   return rec;
@@ -39,6 +41,7 @@ function updateRecord(id, patch) {
   if (idx === -1) return null;
   if (patch.name !== undefined) db.records[idx].name = patch.name;
   if (patch.note !== undefined) db.records[idx].note = patch.note;
+  if (patch.mediaUrl !== undefined) db.records[idx].mediaUrl = patch.mediaUrl;
   db.records[idx].updatedAt = new Date().toISOString();
   writeData(db);
   return db.records[idx];
@@ -97,6 +100,19 @@ function verifyToken(token) {
 function serveStatic(req, res) {
   let p = req.url.split('?')[0];
   if (p === '/' ) p = '/index.html';
+  // allow serving files from uploads/ as /uploads/...
+  if (p.startsWith('/uploads/')) {
+    const file = path.join(UPLOAD_DIR, decodeURIComponent(p.replace('/uploads/', '')));
+    if (!file.startsWith(UPLOAD_DIR)) { res.writeHead(403); res.end('Forbidden'); return; }
+    fs.readFile(file, (err, data) => {
+      if (err) { res.writeHead(404); res.end('Not found'); return; }
+      const ext = path.extname(file).toLowerCase();
+      const map = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.mp4':'video/mp4', '.webm':'video/webm' };
+      res.writeHead(200, { 'Content-Type': map[ext] || 'application/octet-stream' });
+      res.end(data);
+    });
+    return;
+  }
   const file = path.join(PUBLIC_DIR, decodeURIComponent(p));
   if (!file.startsWith(PUBLIC_DIR)) {
     res.writeHead(403); res.end('Forbidden'); return;
@@ -146,7 +162,8 @@ function getUserFromAuth(req) {
   return user;
 }
 
-const server = http.createServer((req, res) => {
+// Create a request handler function so we can reuse for HTTP and HTTPS
+function requestHandler(req, res) {
   if (req.url.startsWith('/api/')) {
     // normalize path and extract id if present
     const [_, api, resource, maybeId] = req.url.split('/'); // ['', 'api', 'records', '123']
@@ -174,28 +191,67 @@ const server = http.createServer((req, res) => {
     // POST /api/records
     // POST /api/records
     if (req.method === 'POST' && resource === 'records' && !maybeId) {
-      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
-      let body = '';
-      let length = 0;
-      req.on('data', chunk => {
-        length += chunk.length;
-        if (length > 1_000_000) { res.writeHead(413); res.end('Payload too large'); req.connection.destroy(); return; }
-        body += chunk;
-      });
-      req.on('end', () => {
-        try {
-          const obj = JSON.parse(body || '{}');
-          if (!obj.name) return sendJson(res, { error: 'name required' }, 400);
+      // support either JSON or multipart/form-data (file upload)
+      const contentType = req.headers['content-type'] || '';
+      if (contentType.indexOf('application/json') === 0) {
+        let body = '';
+        let length = 0;
+        req.on('data', chunk => {
+          length += chunk.length;
+          if (length > 5_000_000) { res.writeHead(413); res.end('Payload too large'); req.connection.destroy(); return; }
+          body += chunk;
+        });
+        req.on('end', () => {
+          try {
+            const obj = JSON.parse(body || '{}');
+            if (!obj.name) return sendJson(res, { error: 'name required' }, 400);
+            const db = readData();
+            const id = (db.records.reduce((m, r) => Math.max(m, r.id || 0), 0) || 0) + 1;
+            const rec = { id, name: obj.name, note: obj.note || '', mediaUrl: obj.mediaUrl || null, createdAt: new Date().toISOString() };
+            db.records.push(rec);
+            writeData(db);
+            sendJson(res, rec, 201);
+          } catch (e) {
+            sendJson(res, { error: 'invalid json' }, 400);
+          }
+        });
+        return;
+      }
+
+      if (contentType.indexOf('multipart/form-data') === 0) {
+        // ensure upload dir exists
+        if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+        const busboy = new Busboy({ headers: req.headers, limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB
+        const fields = {};
+        let savedFilename = null;
+        let fileTooLarge = false;
+        busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
+          // sanitize filename
+          const base = path.basename(filename || 'upload');
+          const unique = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${base}`;
+          const saveTo = path.join(UPLOAD_DIR, unique);
+          const writeStream = fs.createWriteStream(saveTo);
+          file.pipe(writeStream);
+          savedFilename = unique;
+          file.on('limit', () => { fileTooLarge = true; file.unpipe(writeStream); writeStream.end(); try { fs.unlinkSync(saveTo); } catch(e){} });
+        });
+        busboy.on('field', (name, val) => { fields[name] = val; });
+        busboy.on('finish', () => {
+          if (fileTooLarge) return sendJson(res, { error: 'file too large' }, 413);
+          if (!fields.name) return sendJson(res, { error: 'name required' }, 400);
           const db = readData();
           const id = (db.records.reduce((m, r) => Math.max(m, r.id || 0), 0) || 0) + 1;
-          const rec = { id, name: obj.name, note: obj.note || '', createdAt: new Date().toISOString() };
+          const mediaUrl = savedFilename ? `/uploads/${savedFilename}` : (fields.mediaUrl || null);
+          const rec = { id, name: fields.name, note: fields.note || '', mediaUrl, createdAt: new Date().toISOString() };
           db.records.push(rec);
           writeData(db);
-          sendJson(res, rec, 201);
-        } catch (e) {
-          sendJson(res, { error: 'invalid json' }, 400);
-        }
-      });
+          return sendJson(res, rec, 201);
+        });
+        req.pipe(busboy);
+        return;
+      }
+
+      return sendJson(res, { error: 'unsupported content-type' }, 415);
       return;
     }
 
@@ -219,6 +275,7 @@ const server = http.createServer((req, res) => {
           if (idx === -1) return sendJson(res, { error: 'not found' }, 404);
           if (obj.name !== undefined) db.records[idx].name = obj.name;
           if (obj.note !== undefined) db.records[idx].note = obj.note;
+          if (obj.mediaUrl !== undefined) db.records[idx].mediaUrl = obj.mediaUrl;
           db.records[idx].updatedAt = new Date().toISOString();
           writeData(db);
           return sendJson(res, db.records[idx]);
@@ -665,10 +722,52 @@ const server = http.createServer((req, res) => {
   }
 
   serveStatic(req, res);
-});
+}
 
+// If TLS certs are present, start both HTTPS and HTTP (HTTP will redirect to HTTPS)
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));
+const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+const CERT_DIR = path.join(__dirname, 'certs');
+let httpsStarted = false;
+
+function startServers() {
+  // start plain HTTP server (for compatibility and localtunnel/ngrok)
+  const httpServer = http.createServer((req, res) => {
+    // if we have HTTPS running, redirect browsers to HTTPS URL
+    if (httpsStarted && req.headers.host) {
+      const host = req.headers.host.split(':')[0];
+      const target = `https://${host}:${HTTPS_PORT}${req.url}`;
+      res.writeHead(302, { Location: target });
+      res.end();
+      return;
+    }
+    // otherwise, handle normally
+    requestHandler(req, res);
+  });
+
+  httpServer.listen(PORT, () => console.log(`HTTP server listening on http://localhost:${PORT}`));
+
+  // try to load certs
+  try {
+    const keyPath = path.join(CERT_DIR, 'key.pem');
+    const certPath = path.join(CERT_DIR, 'cert.pem');
+    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+      const key = fs.readFileSync(keyPath);
+      const cert = fs.readFileSync(certPath);
+      const httpsServer = require('https').createServer({ key, cert }, requestHandler);
+      httpsServer.listen(HTTPS_PORT, () => {
+        httpsStarted = true;
+        console.log(`HTTPS server listening on https://localhost:${HTTPS_PORT}`);
+      });
+    } else {
+      console.log('TLS certs not found in certs/, HTTPS not started. To enable HTTPS place key.pem and cert.pem in certs/');
+    }
+  } catch (e) {
+    console.log('Failed to start HTTPS server:', e && e.message);
+  }
+}
+
+startServers();
 // initialize adapter asynchronously (won't block server start)
 initDbAdapter().then(() => {
   console.log('dbAdapter ready (post-start):', dbAdapter.available());
@@ -676,4 +775,7 @@ initDbAdapter().then(() => {
   console.log('dbAdapter init failed (post-start):', e && e.message);
 });
 
-module.exports = server;
+// server module no longer exports a single server instance (we start HTTP/HTTPS inside startServers)
+module.exports = {
+  start: startServers
+};
