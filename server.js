@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -239,6 +240,113 @@ const server = http.createServer((req, res) => {
       const removed = db.records.splice(idx, 1)[0];
       writeData(db);
       return sendJson(res, removed);
+    }
+
+    // ===== memorials endpoints (alias for records) =====
+    // GET /api/memorials
+    if (req.method === 'GET' && resource === 'memorials' && !maybeId) {
+      const db = readData();
+      sendJson(res, db.records);
+      return;
+    }
+
+    // GET /api/memorials/:id - includes associated media
+    if (req.method === 'GET' && resource === 'memorials' && maybeId && !req.url.includes('/media')) {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const db = readData();
+      const memorial = db.records.find(r => r.id === id);
+      if (!memorial) return sendJson(res, { error: 'not found' }, 404);
+      // include associated media
+      const media = (db.media || []).filter(m => m.memorialId === id);
+      return sendJson(res, { ...memorial, media });
+    }
+
+    // POST /api/memorials/:id/media - add external media URL to memorial
+    if (req.method === 'POST' && resource === 'memorials' && maybeId && req.url.includes('/media')) {
+      const memorialId = Number(maybeId);
+      if (!Number.isFinite(memorialId) || memorialId <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      
+      let body = '';
+      let length = 0;
+      req.on('data', chunk => {
+        length += chunk.length;
+        if (length > 1_000_000) { res.writeHead(413); res.end('Payload too large'); req.connection.destroy(); return; }
+        body += chunk;
+      });
+      req.on('end', async () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj.url) return sendJson(res, { error: 'url required' }, 400);
+          
+          // Validate URL format
+          let parsedUrl;
+          try {
+            parsedUrl = new URL(obj.url);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+              return sendJson(res, { error: 'url must use http or https protocol' }, 400);
+            }
+          } catch (e) {
+            return sendJson(res, { error: 'invalid url format' }, 400);
+          }
+
+          const db = readData();
+          const memorial = db.records.find(r => r.id === memorialId);
+          if (!memorial) return sendJson(res, { error: 'memorial not found' }, 404);
+
+          // Helper to create media record
+          const createMediaRecord = () => {
+            if (!db.media) db.media = [];
+            const id = (db.media.reduce((m, med) => Math.max(m, med.id || 0), 0) || 0) + 1;
+            const mediaRecord = {
+              id,
+              memorialId,
+              url: obj.url,
+              type: obj.type || 'link',
+              external: true,
+              createdAt: new Date().toISOString()
+            };
+            db.media.push(mediaRecord);
+            writeData(db);
+            return sendJson(res, mediaRecord, 201);
+          };
+
+          // Validate URL with HEAD request (best effort)
+          const httpModule = parsedUrl.protocol === 'https:' ? https : http;
+          const headReq = httpModule.request({
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'HEAD',
+            timeout: 5000
+          }, (headRes) => {
+            // Accept any 2xx or 3xx response as valid
+            if (headRes.statusCode >= 400) {
+              return sendJson(res, { error: 'url validation failed: server returned ' + headRes.statusCode }, 400);
+            }
+            return createMediaRecord();
+          });
+
+          headReq.on('error', (e) => {
+            // For network errors (ENOTFOUND, etc), be lenient and accept the URL
+            // This allows external URLs to work even if they can't be validated
+            // Only reject if it's clearly a bad URL format (caught earlier)
+            return createMediaRecord();
+          });
+
+          headReq.on('timeout', () => {
+            headReq.destroy();
+            // Accept URLs that timeout - they might just be slow
+            return createMediaRecord();
+          });
+
+          headReq.end();
+        } catch (e) {
+          return sendJson(res, { error: 'invalid json' }, 400);
+        }
+      });
+      return;
     }
 
     // ===== users endpoints =====
