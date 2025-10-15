@@ -6,6 +6,7 @@ const path = require('path');
 const server = require('../server');
 const base = 'http://localhost:3000';
 const dataFile = path.join(__dirname, '..', 'data.json');
+const sqliteFile = path.join(__dirname, '..', 'data.sqlite');
 
 function req(opts, body) {
   return new Promise((resolve, reject) => {
@@ -22,6 +23,8 @@ function req(opts, body) {
   // reset data
   // reset data.json for compatibility
   fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [], memorials: [], media: [] }));
+  // also remove sqlite file if it exists to ensure clean state
+  if (fs.existsSync(sqliteFile)) fs.unlinkSync(sqliteFile);
 
   // register user
   let r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'bob', password: 'secret' }));
