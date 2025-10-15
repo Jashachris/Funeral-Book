@@ -2,10 +2,20 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const Busboy = require('busboy');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const dbAdapter = require('./lib/dbAdapter');
+
+// Configuration
+const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '104857600', 10); // 100MB default
+
+// Ensure uploads directory exists
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 // keep simple JSON-backed DB in data.json
 // delegate to adapter (sql.js WASM when available, else JSON file)
 async function initDbAdapter() {
@@ -660,7 +670,209 @@ const server = http.createServer((req, res) => {
       return sendJson(res, { stopped: !!info });
     }
 
+    // POST /api/memorials/:id/uploads - multipart file upload
+    if (req.method === 'POST' && resource === 'memorials' && maybeId) {
+      const parts = req.url.split('/');
+      if (parts.length >= 5 && parts[4] === 'uploads') {
+        const memorialId = Number(maybeId);
+        if (!Number.isFinite(memorialId) || memorialId <= 0) {
+          return sendJson(res, { error: 'invalid memorial id' }, 400);
+        }
+
+        const contentType = req.headers['content-type'] || '';
+        if (!contentType.includes('multipart/form-data')) {
+          return sendJson(res, { error: 'content-type must be multipart/form-data' }, 415);
+        }
+
+        // Initialize memorials and media in data if not present
+        const db = readData();
+        if (!db.memorials) db.memorials = [];
+        if (!db.media) db.media = [];
+
+        // Check if memorial exists, if not create a placeholder
+        let memorial = db.memorials.find(m => m.id === memorialId);
+        if (!memorial) {
+          memorial = { 
+            id: memorialId, 
+            name: `Memorial ${memorialId}`, 
+            createdAt: new Date().toISOString() 
+          };
+          db.memorials.push(memorial);
+          writeData(db);
+        }
+
+        const busboy = Busboy({ 
+          headers: req.headers,
+          limits: {
+            fileSize: MAX_FILE_SIZE
+          }
+        });
+
+        let uploadedFile = null;
+        let hasError = false;
+        let errorMessage = '';
+        let fileProcessing = false;
+        let finishCalled = false;
+
+        const completeUpload = () => {
+          if (!finishCalled) return;
+          if (fileProcessing) return;
+
+          if (hasError) {
+            return sendJson(res, { error: errorMessage || 'Upload failed' }, 400);
+          }
+          
+          if (!uploadedFile) {
+            return sendJson(res, { error: 'No file uploaded' }, 400);
+          }
+
+          return sendJson(res, uploadedFile, 201);
+        };
+
+        busboy.on('file', (fieldname, file, info) => {
+          fileProcessing = true;
+
+          if (hasError) {
+            file.resume();
+            fileProcessing = false;
+            return;
+          }
+
+          const { filename, encoding, mimeType } = info;
+          
+          if (!filename) {
+            hasError = true;
+            errorMessage = 'No filename provided';
+            file.resume();
+            fileProcessing = false;
+            return;
+          }
+
+          // Generate unique filename
+          const timestamp = Date.now();
+          const randomStr = crypto.randomBytes(8).toString('hex');
+          const ext = path.extname(filename);
+          const safeName = `${timestamp}-${randomStr}${ext}`;
+          const filepath = path.join(UPLOADS_DIR, safeName);
+
+          const writeStream = fs.createWriteStream(filepath);
+          let fileSize = 0;
+          let fileTruncated = false;
+
+          file.on('data', (data) => {
+            fileSize += data.length;
+          });
+
+          file.on('limit', () => {
+            fileTruncated = true;
+          });
+
+          file.pipe(writeStream);
+
+          writeStream.on('finish', () => {
+            if (fileTruncated) {
+              // Clean up truncated file
+              fs.unlinkSync(filepath);
+              hasError = true;
+              errorMessage = `File too large. Maximum size is ${MAX_FILE_SIZE} bytes`;
+              fileProcessing = false;
+              completeUpload();
+              return;
+            }
+
+            // Create media record
+            const db = readData();
+            if (!db.media) db.media = [];
+            const mediaId = (db.media.reduce((m, med) => Math.max(m, med.id || 0), 0) || 0) + 1;
+            
+            uploadedFile = {
+              id: mediaId,
+              memorialId: memorialId,
+              filename: safeName,
+              originalName: filename,
+              mimeType: mimeType,
+              size: fileSize,
+              url: `/uploads/${safeName}`,
+              createdAt: new Date().toISOString()
+            };
+
+            db.media.push(uploadedFile);
+            writeData(db);
+            
+            fileProcessing = false;
+            completeUpload();
+          });
+
+          writeStream.on('error', (err) => {
+            hasError = true;
+            errorMessage = 'File write error';
+            console.error('Upload write error:', err);
+            fileProcessing = false;
+            completeUpload();
+          });
+        });
+
+        busboy.on('finish', () => {
+          finishCalled = true;
+          completeUpload();
+        });
+
+        busboy.on('error', (err) => {
+          console.error('Busboy error:', err);
+          if (!res.headersSent) {
+            return sendJson(res, { error: 'Upload error' }, 500);
+          }
+        });
+
+        req.pipe(busboy);
+        return;
+      }
+    }
+
     res.writeHead(405); res.end('Method not allowed');
+    return;
+  }
+
+  // Serve uploaded files from /uploads
+  if (req.url.startsWith('/uploads/')) {
+    const filename = path.basename(req.url.split('?')[0]);
+    const filepath = path.join(UPLOADS_DIR, filename);
+    
+    // Security check: ensure file is in uploads directory
+    if (!filepath.startsWith(UPLOADS_DIR)) {
+      res.writeHead(403); 
+      res.end('Forbidden'); 
+      return;
+    }
+
+    fs.readFile(filepath, (err, data) => {
+      if (err) { 
+        res.writeHead(404); 
+        res.end('Not found'); 
+        return; 
+      }
+      
+      const ext = path.extname(filepath).toLowerCase();
+      const mimeTypes = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
+        '.mp4': 'video/mp4',
+        '.webm': 'video/webm',
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain'
+      };
+      
+      const contentType = mimeTypes[ext] || 'application/octet-stream';
+      res.writeHead(200, { 
+        'Content-Type': contentType,
+        'Content-Length': data.length
+      });
+      res.end(data);
+    });
     return;
   }
 
