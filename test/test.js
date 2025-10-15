@@ -21,7 +21,7 @@ function req(opts, body) {
 (async ()=>{
   // reset data
   // reset data.json for compatibility
-  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [] }));
+  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [], media: [] }));
 
   // register user
   let r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'bob', password: 'secret' }));
@@ -140,6 +140,37 @@ function req(opts, body) {
   // stop live
   r = await req({ hostname: 'localhost', port: 3000, path: '/api/live/stop', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({}));
   assert.strictEqual(r.statusCode, 200, 'live stop should return 200');
+
+  // test memorial media endpoints
+  // create a memorial (using records endpoint)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/records', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ name: 'Test Memorial', note: 'For media testing' }));
+  assert.strictEqual(r.statusCode, 201, 'create memorial should return 201');
+  const memorial = JSON.parse(r.body);
+
+  // add external media URL to memorial
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}/media`, method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ url: 'https://example.com/photo.jpg', type: 'photo' }));
+  assert.strictEqual(r.statusCode, 201, 'add external media should return 201');
+  const media = JSON.parse(r.body);
+  assert.strictEqual(media.memorialId, memorial.id, 'media should be linked to memorial');
+  assert.strictEqual(media.url, 'https://example.com/photo.jpg', 'media url should match');
+  assert.strictEqual(media.type, 'photo', 'media type should match');
+  assert.strictEqual(media.external, true, 'media should be marked as external');
+
+  // get memorial and verify media is included
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}`, method: 'GET' });
+  assert.strictEqual(r.statusCode, 200, 'GET memorial should return 200');
+  const memorialWithMedia = JSON.parse(r.body);
+  assert.ok(Array.isArray(memorialWithMedia.media), 'memorial should have media array');
+  assert.strictEqual(memorialWithMedia.media.length, 1, 'memorial should have 1 media item');
+  assert.strictEqual(memorialWithMedia.media[0].url, 'https://example.com/photo.jpg', 'media url should be included');
+
+  // test invalid URL rejection
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}/media`, method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ url: 'not-a-valid-url' }));
+  assert.strictEqual(r.statusCode, 400, 'invalid url format should return 400');
+
+  // test non-existent memorial
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials/99999/media', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ url: 'https://example.com/test.jpg' }));
+  assert.strictEqual(r.statusCode, 404, 'non-existent memorial should return 404');
 
   console.log('All tests passed');
   server.close();
