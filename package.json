@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/test.js",
+    "test": "node test/run-all.js",
+    "test:original": "node test/test.js",
+    "test:unit": "node test/unit/crypto.test.js",
+    "test:auth": "node test/integration/auth.test.js",
+    "test:profile": "node test/integration/profile.test.js",
     "share": "node scripts/share.js",
     "seed": "node scripts/seed-data.js",
     "lint": "eslint .",

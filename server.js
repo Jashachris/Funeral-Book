@@ -289,6 +289,24 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // GET /api/users/:id - get user profile
+    if (resource === 'users' && req.method === 'GET' && maybeId && maybeId !== 'login') {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const db = readData();
+      const user = db.users.find(u => u.id === id);
+      if (!user) return sendJson(res, { error: 'user not found' }, 404);
+      // Return public user info (exclude password and sensitive fields)
+      const publicUser = {
+        id: user.id,
+        username: user.username,
+        createdAt: user.createdAt,
+        private: user.private || false,
+        suspended: user.suspended || false
+      };
+      return sendJson(res, publicUser);
+    }
+
     // ===== posts endpoints =====
     if (resource === 'posts' && req.method === 'GET' && !maybeId) {
       const db = readData();
