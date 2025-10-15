@@ -5,6 +5,7 @@ const path = require('path');
 
 const server = require('../server');
 const dataFile = path.join(__dirname, '..', 'data.json');
+const sqliteFile = path.join(__dirname, '..', 'data.sqlite');
 
 function req(opts, body) {
   return new Promise((resolve, reject) => {
@@ -56,7 +57,7 @@ function createMultipartBody(fields, files) {
 }
 
 (async ()=>{
-  // reset data
+  // reset data - both JSON and SQLite
   fs.writeFileSync(dataFile, JSON.stringify({ 
     records: [], 
     users: [], 
@@ -70,6 +71,10 @@ function createMultipartBody(fields, files) {
     followers: [],
     memorials: []
   }));
+  // Remove SQLite file to ensure clean state
+  if (fs.existsSync(sqliteFile)) {
+    fs.unlinkSync(sqliteFile);
+  }
 
   console.log('=== Memorial Integration Test ===');
 
