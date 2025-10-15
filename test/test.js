@@ -21,7 +21,7 @@ function req(opts, body) {
 (async ()=>{
   // reset data
   // reset data.json for compatibility
-  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [] }));
+  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [], memorials: [], media: [] }));
 
   // register user
   let r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'bob', password: 'secret' }));
@@ -140,6 +140,50 @@ function req(opts, body) {
   // stop live
   r = await req({ hostname: 'localhost', port: 3000, path: '/api/live/stop', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({}));
   assert.strictEqual(r.statusCode, 200, 'live stop should return 200');
+
+  // Test multipart upload to /api/memorials/:id/uploads
+  const testImagePath = path.join(__dirname, 'test-image.png');
+  // Create a small test image (1x1 PNG)
+  const pngData = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  fs.writeFileSync(testImagePath, pngData);
+
+  // Build multipart form data properly with binary data
+  const boundary = '----WebKitFormBoundary' + Math.random().toString(36).slice(2);
+  const parts = [];
+  parts.push(Buffer.from(`--${boundary}\r\n`));
+  parts.push(Buffer.from('Content-Disposition: form-data; name="file"; filename="test.png"\r\n'));
+  parts.push(Buffer.from('Content-Type: image/png\r\n\r\n'));
+  parts.push(pngData);
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  const multipartBody = Buffer.concat(parts);
+
+  r = await req({ 
+    hostname: 'localhost', 
+    port: 3000, 
+    path: '/api/memorials/1/uploads', 
+    method: 'POST', 
+    headers: { 
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': multipartBody.length
+    } 
+  }, multipartBody);
+  if (r.statusCode !== 201) {
+    console.log('Upload error:', r.statusCode, r.body);
+  }
+  assert.strictEqual(r.statusCode, 201, 'upload should return 201');
+  const upload = JSON.parse(r.body);
+  assert.ok(upload.id, 'upload should have id');
+  assert.ok(upload.url, 'upload should have url');
+  assert.strictEqual(upload.memorialId, 1, 'upload should be linked to memorial');
+
+  // Verify file is accessible at /uploads/<file>
+  const uploadFilename = upload.url.split('/').pop();
+  r = await req({ hostname: 'localhost', port: 3000, path: `/uploads/${uploadFilename}`, method: 'GET' });
+  assert.strictEqual(r.statusCode, 200, 'uploaded file should be accessible');
+  assert.ok(r.body.length > 0, 'uploaded file should have content');
+
+  // Clean up test image
+  fs.unlinkSync(testImagePath);
 
   console.log('All tests passed');
   server.close();

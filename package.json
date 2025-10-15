@@ -16,6 +16,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "busboy": "^1.6.0",
     "marked": "^4.3.0",
     "puppeteer": "^24.24.1",
     "sql.js": "^1.8.0"
