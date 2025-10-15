@@ -5,6 +5,7 @@ const path = require('path');
 
 const server = require('../../server');
 const dataFile = path.join(__dirname, '..', '..', 'data.json');
+const sqliteFile = path.join(__dirname, '..', '..', 'data.sqlite');
 
 function req(opts, body) {
   return new Promise((resolve, reject) => {
@@ -20,11 +21,15 @@ function req(opts, body) {
 async function runAuthTests() {
   console.log('\n=== Auth Integration Tests ===\n');
   
-  // Reset data
+  // Reset data - both JSON and SQLite if present
   fs.writeFileSync(dataFile, JSON.stringify({ 
     records: [], users: [], posts: [], chat: [], sessions: [], 
     live: {}, blocks: [], reports: [], followRequests: [], followers: [] 
   }));
+  // Remove SQLite file if exists to ensure clean state
+  if (fs.existsSync(sqliteFile)) {
+    fs.unlinkSync(sqliteFile);
+  }
 
   // Test 1: User signup with valid credentials
   console.log('Test: User signup with valid credentials...');
@@ -110,10 +115,13 @@ async function runAuthTests() {
   const privateUser = JSON.parse(r.body);
   assert.ok(privateUser.id, 'private user should have id');
   
-  // Verify in data that the user is marked as private
-  const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-  const storedUser = data.users.find(u => u.username === 'privateuser');
-  assert.strictEqual(storedUser.private, true, 'user should be marked as private in database');
+  // Verify by fetching the profile that the user is marked as private
+  r = await req({ 
+    hostname: 'localhost', port: 3000, path: `/api/users/${privateUser.id}`, 
+    method: 'GET'
+  });
+  const profile = JSON.parse(r.body);
+  assert.strictEqual(profile.private, true, 'user should be marked as private');
   console.log('✓ Private account created successfully');
 
   // Test 8: Authenticated request with token

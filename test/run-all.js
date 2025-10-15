@@ -23,6 +23,10 @@ async function runAllTests() {
     const { runProfileTests } = require('./integration/profile.test.js');
     await runProfileTests();
     
+    // Run integration tests (password reset)
+    const { runPasswordResetTests } = require('./integration/password-reset.test.js');
+    await runPasswordResetTests();
+    
     // Close the current server before running original tests
     console.log('\n📝 Running Original Integration Tests...\n');
     server.close();

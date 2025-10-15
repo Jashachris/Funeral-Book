@@ -307,6 +307,29 @@ const server = http.createServer((req, res) => {
       return sendJson(res, publicUser);
     }
 
+    // POST /api/users/reset-password - reset password (requires authentication)
+    if (resource === 'users' && req.method === 'POST' && maybeId === 'reset-password') {
+      const authUser = getUserFromAuth(req);
+      if (!authUser) return sendJson(res, { error: 'unauthorized' }, 401);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj.oldPassword || !obj.newPassword) return sendJson(res, { error: 'oldPassword and newPassword required' }, 400);
+          const db = readData();
+          const user = db.users.find(u => u.id === authUser.id);
+          if (!user || !verifyPassword(obj.oldPassword, user.password)) return sendJson(res, { error: 'invalid old password' }, 401);
+          // Update password
+          user.password = hashPassword(obj.newPassword);
+          writeData(db);
+          return sendJson(res, { success: true, message: 'password updated' });
+        } catch (e) { return sendJson(res, { error: 'invalid json' }, 400); }
+      });
+      return;
+    }
+
     // ===== posts endpoints =====
     if (resource === 'posts' && req.method === 'GET' && !maybeId) {
       const db = readData();
