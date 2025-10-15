@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/test.js",
+    "test": "node test/test.js && node test/test-memorial.js",
+    "test:memorial": "node test/test-memorial.js",
     "share": "node scripts/share.js",
     "seed": "node scripts/seed-data.js",
     "lint": "eslint .",
