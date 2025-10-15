@@ -21,7 +21,7 @@ function req(opts, body) {
 (async ()=>{
   // reset data
   // reset data.json for compatibility
-  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [] }));
+  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [], memorials: [] }));
 
   // register user
   let r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'bob', password: 'secret' }));
@@ -140,6 +140,115 @@ function req(opts, body) {
   // stop live
   r = await req({ hostname: 'localhost', port: 3000, path: '/api/live/stop', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({}));
   assert.strictEqual(r.statusCode, 200, 'live stop should return 200');
+
+  // ===== memorials endpoints tests =====
+  // create a new user charlie for private memorial tests (alice is suspended)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'charlie', password: 'secret123' }));
+  assert.strictEqual(r.statusCode, 201, 'register charlie should return 201');
+  const charlie = JSON.parse(r.body);
+
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/users/login', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'charlie', password: 'secret123' }));
+  assert.strictEqual(r.statusCode, 200, 'charlie login should return 200');
+  const charlieToken = JSON.parse(r.body).token;
+
+  // POST create memorial (authenticated as bob)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ title: 'In Memory of John Doe', description: 'Beloved father', dateOfBirth: '1950-01-15', dateOfDeath: '2024-06-20', privacy: 'public', tags: ['family', 'father'] }));
+  assert.strictEqual(r.statusCode, 201, 'create memorial should return 201');
+  const memorial1 = JSON.parse(r.body);
+  assert.strictEqual(memorial1.title, 'In Memory of John Doe');
+  assert.strictEqual(memorial1.ownerId, bob.id);
+  assert.strictEqual(memorial1.privacy, 'public');
+  assert.ok(Array.isArray(memorial1.tags));
+  assert.ok(memorial1.createdAt);
+
+  // POST create memorial without auth should fail
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ title: 'Test' }));
+  assert.strictEqual(r.statusCode, 401, 'create memorial without auth should return 401');
+
+  // POST create memorial without title should fail
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ description: 'No title' }));
+  assert.strictEqual(r.statusCode, 400, 'create memorial without title should return 400');
+
+  // POST create private memorial (as charlie)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${charlieToken}` } }, JSON.stringify({ title: 'Private Memorial', description: 'Private family only', privacy: 'private', tags: ['private'] }));
+  assert.strictEqual(r.statusCode, 201, 'create private memorial should return 201');
+  const privateMem = JSON.parse(r.body);
+  assert.strictEqual(privateMem.privacy, 'private');
+  assert.strictEqual(privateMem.ownerId, charlie.id);
+
+  // GET /api/memorials (list - as bob)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials', method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+  assert.strictEqual(r.statusCode, 200, 'GET memorials should return 200');
+  const memorials = JSON.parse(r.body);
+  assert.ok(Array.isArray(memorials));
+  // bob should see his own public memorial but not charlie's private one
+  const bobMem = memorials.find(m => m.id === memorial1.id);
+  assert.ok(bobMem, 'bob should see his own memorial');
+  const charliePrivMem = memorials.find(m => m.id === privateMem.id);
+  assert.ok(!charliePrivMem, 'bob should not see charlie private memorial');
+
+  // GET /api/memorials (list - no auth)
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials', method: 'GET' });
+  assert.strictEqual(r.statusCode, 200, 'GET memorials without auth should return 200');
+  const publicMemorials = JSON.parse(r.body);
+  assert.ok(Array.isArray(publicMemorials));
+  // should only see public memorials
+  const pubMem = publicMemorials.find(m => m.id === memorial1.id);
+  assert.ok(pubMem, 'unauthenticated should see public memorial');
+  const privMemInList = publicMemorials.find(m => m.id === privateMem.id);
+  assert.ok(!privMemInList, 'unauthenticated should not see private memorial');
+
+  // GET /api/memorials/:id (single memorial - public)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'GET' });
+  assert.strictEqual(r.statusCode, 200, 'GET public memorial by id should return 200');
+  const fetchedMem = JSON.parse(r.body);
+  assert.strictEqual(fetchedMem.id, memorial1.id);
+
+  // GET /api/memorials/:id (private memorial as owner - charlie)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${privateMem.id}`, method: 'GET', headers: { Authorization: `Bearer ${charlieToken}` } });
+  assert.strictEqual(r.statusCode, 200, 'GET private memorial as owner should return 200');
+
+  // GET /api/memorials/:id (private memorial as non-owner - bob)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${privateMem.id}`, method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+  assert.strictEqual(r.statusCode, 403, 'GET private memorial as non-owner should return 403');
+
+  // GET /api/memorials/:id (private memorial without auth)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${privateMem.id}`, method: 'GET' });
+  assert.strictEqual(r.statusCode, 403, 'GET private memorial without auth should return 403');
+
+  // PUT /api/memorials/:id (update as owner)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ description: 'Updated description', tags: ['updated'] }));
+  assert.strictEqual(r.statusCode, 200, 'PUT memorial as owner should return 200');
+  const updatedMem = JSON.parse(r.body);
+  assert.strictEqual(updatedMem.description, 'Updated description');
+  assert.strictEqual(updatedMem.tags[0], 'updated');
+  assert.ok(updatedMem.updatedAt);
+
+  // PUT /api/memorials/:id (update as non-owner should fail)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${charlieToken}` } }, JSON.stringify({ description: 'Hacked' }));
+  assert.strictEqual(r.statusCode, 403, 'PUT memorial as non-owner should return 403');
+
+  // PUT /api/memorials/:id (update without auth should fail)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'PUT', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ description: 'Hacked' }));
+  assert.strictEqual(r.statusCode, 401, 'PUT memorial without auth should return 401');
+
+  // DELETE /api/memorials/:id (delete as non-owner should fail)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'DELETE', headers: { Authorization: `Bearer ${charlieToken}` } });
+  assert.strictEqual(r.statusCode, 403, 'DELETE memorial as non-owner should return 403');
+
+  // DELETE /api/memorials/:id (delete without auth should fail)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'DELETE' });
+  assert.strictEqual(r.statusCode, 401, 'DELETE memorial without auth should return 401');
+
+  // DELETE /api/memorials/:id (delete as owner)
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+  assert.strictEqual(r.statusCode, 200, 'DELETE memorial as owner should return 200');
+  const deleted = JSON.parse(r.body);
+  assert.strictEqual(deleted.id, memorial1.id);
+
+  // GET memorial after delete should return 404
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial1.id}`, method: 'GET' });
+  assert.strictEqual(r.statusCode, 404, 'GET deleted memorial should return 404');
 
   console.log('All tests passed');
   server.close();
