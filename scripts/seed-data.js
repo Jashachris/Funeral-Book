@@ -46,6 +46,7 @@ const seedData = {
   reports: [],
   followRequests: [],
   followers: [],
+  memorials: [],
 };
 
 console.log('Seeding data to', DATA_FILE);

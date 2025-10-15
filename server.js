@@ -588,6 +588,136 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // ===== memorials endpoints =====
+    // GET /api/memorials - list memorials with privacy filtering
+    if (resource === 'memorials' && req.method === 'GET' && !maybeId) {
+      const db = readData();
+      const authUser = getUserFromAuth(req);
+      // filter based on privacy setting
+      const visible = (db.memorials || []).filter(m => {
+        if (m.privacy === 'public') return true;
+        if (!authUser) return false;
+        // owner can always see their own memorials
+        if (m.ownerId === authUser.id) return true;
+        // private memorials only visible to owner
+        if (m.privacy === 'private') return false;
+        return true;
+      });
+      return sendJson(res, visible);
+    }
+
+    // GET /api/memorials/:id - get single memorial with permission check
+    if (resource === 'memorials' && req.method === 'GET' && maybeId) {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const db = readData();
+      const memorial = db.memorials.find(m => m.id === id);
+      if (!memorial) return sendJson(res, { error: 'not found' }, 404);
+      const authUser = getUserFromAuth(req);
+      // check privacy permissions
+      if (memorial.privacy === 'private') {
+        if (!authUser || authUser.id !== memorial.ownerId) {
+          return sendJson(res, { error: 'forbidden' }, 403);
+        }
+      }
+      return sendJson(res, memorial);
+    }
+
+    // POST /api/memorials - create memorial (authenticated)
+    if (resource === 'memorials' && req.method === 'POST' && !maybeId) {
+      const user = getUserFromAuth(req);
+      if (!user) return sendJson(res, { error: 'unauthorized' }, 401);
+      if (user.suspended) return sendJson(res, { error: 'suspended' }, 403);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj.title) return sendJson(res, { error: 'title required' }, 400);
+          const tags = Array.isArray(obj.tags) ? obj.tags.slice(0, 10) : [];
+          const privacy = obj.privacy === 'private' ? 'private' : 'public';
+          const now = new Date().toISOString();
+          const db = readData();
+          const id = (db.memorials.reduce((m, mem) => Math.max(m, mem.id || 0), 0) || 0) + 1;
+          const memorial = {
+            id,
+            ownerId: user.id,
+            title: obj.title,
+            description: obj.description || '',
+            dateOfBirth: obj.dateOfBirth || '',
+            dateOfDeath: obj.dateOfDeath || '',
+            privacy,
+            tags,
+            createdAt: now,
+            updatedAt: now
+          };
+          db.memorials.push(memorial);
+          writeData(db);
+          return sendJson(res, memorial, 201);
+        } catch (e) { return sendJson(res, { error: 'invalid json' }, 400); }
+      });
+      return;
+    }
+
+    // PUT /api/memorials/:id - update memorial (owner only)
+    if (resource === 'memorials' && req.method === 'PUT' && maybeId) {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const user = getUserFromAuth(req);
+      if (!user) return sendJson(res, { error: 'unauthorized' }, 401);
+      if (user.suspended) return sendJson(res, { error: 'suspended' }, 403);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          const db = readData();
+          const idx = db.memorials.findIndex(m => m.id === id);
+          if (idx === -1) return sendJson(res, { error: 'not found' }, 404);
+          // check ownership
+          if (db.memorials[idx].ownerId !== user.id) {
+            return sendJson(res, { error: 'forbidden' }, 403);
+          }
+          // update fields
+          if (obj.title !== undefined) db.memorials[idx].title = obj.title;
+          if (obj.description !== undefined) db.memorials[idx].description = obj.description;
+          if (obj.dateOfBirth !== undefined) db.memorials[idx].dateOfBirth = obj.dateOfBirth;
+          if (obj.dateOfDeath !== undefined) db.memorials[idx].dateOfDeath = obj.dateOfDeath;
+          if (obj.privacy !== undefined) {
+            db.memorials[idx].privacy = obj.privacy === 'private' ? 'private' : 'public';
+          }
+          if (obj.tags !== undefined && Array.isArray(obj.tags)) {
+            db.memorials[idx].tags = obj.tags.slice(0, 10);
+          }
+          db.memorials[idx].updatedAt = new Date().toISOString();
+          writeData(db);
+          return sendJson(res, db.memorials[idx]);
+        } catch (e) { return sendJson(res, { error: 'invalid json' }, 400); }
+      });
+      return;
+    }
+
+    // DELETE /api/memorials/:id - delete memorial (owner only)
+    if (resource === 'memorials' && req.method === 'DELETE' && maybeId) {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const user = getUserFromAuth(req);
+      if (!user) return sendJson(res, { error: 'unauthorized' }, 401);
+      if (user.suspended) return sendJson(res, { error: 'suspended' }, 403);
+      const db = readData();
+      const idx = db.memorials.findIndex(m => m.id === id);
+      if (idx === -1) return sendJson(res, { error: 'not found' }, 404);
+      // check ownership
+      if (db.memorials[idx].ownerId !== user.id) {
+        return sendJson(res, { error: 'forbidden' }, 403);
+      }
+      const removed = db.memorials.splice(idx, 1)[0];
+      writeData(db);
+      return sendJson(res, removed);
+    }
+
     // ===== chat endpoints (SSE + send) =====
     if (resource === 'chat' && req.method === 'GET' && maybeId === 'stream') {
       // SSE with optional room query param
