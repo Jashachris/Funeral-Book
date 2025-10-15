@@ -21,7 +21,7 @@ function req(opts, body) {
 (async ()=>{
   // reset data
   // reset data.json for compatibility
-  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [] }));
+  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [], memorials: [], media: [] }));
 
   // register user
   let r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'bob', password: 'secret' }));
@@ -140,6 +140,52 @@ function req(opts, body) {
   // stop live
   r = await req({ hostname: 'localhost', port: 3000, path: '/api/live/stop', method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({}));
   assert.strictEqual(r.statusCode, 200, 'live stop should return 200');
+
+  // ===== test memorials and media =====
+  // create a memorial
+  r = await req({ hostname: 'localhost', port: 3000, path: '/api/memorials', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ name: 'John Doe Memorial', note: 'In loving memory' }));
+  assert.strictEqual(r.statusCode, 201, 'create memorial should return 201');
+  const memorial = JSON.parse(r.body);
+  assert.strictEqual(memorial.name, 'John Doe Memorial');
+  assert.ok(memorial.id, 'memorial should have an id');
+
+  // get memorial without media
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}`, method: 'GET' });
+  assert.strictEqual(r.statusCode, 200, 'GET memorial should return 200');
+  let memorialData = JSON.parse(r.body);
+  assert.strictEqual(memorialData.name, 'John Doe Memorial');
+  assert.ok(Array.isArray(memorialData.media), 'memorial should have media array');
+  assert.strictEqual(memorialData.media.length, 0, 'memorial should have no media initially');
+
+  // upload media metadata
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}/media`, method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ url: 'https://example.com/photo.jpg', type: 'image', thumbnailUrl: 'https://example.com/thumb.jpg', size: 1024000, external: false }));
+  assert.strictEqual(r.statusCode, 201, 'upload media metadata should return 201');
+  const media1 = JSON.parse(r.body);
+  assert.strictEqual(media1.url, 'https://example.com/photo.jpg');
+  assert.strictEqual(media1.type, 'image');
+  assert.strictEqual(media1.memorialId, memorial.id);
+  assert.strictEqual(media1.userId, 1);
+  assert.ok(media1.id, 'media should have an id');
+
+  // upload another media
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}/media`, method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` } }, JSON.stringify({ url: 'https://example.com/video.mp4', type: 'video', size: 5120000, external: true }));
+  assert.strictEqual(r.statusCode, 201, 'upload second media metadata should return 201');
+  const media2 = JSON.parse(r.body);
+  assert.strictEqual(media2.type, 'video');
+  assert.strictEqual(media2.external, true);
+
+  // get memorial with media
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}`, method: 'GET' });
+  assert.strictEqual(r.statusCode, 200, 'GET memorial with media should return 200');
+  memorialData = JSON.parse(r.body);
+  assert.ok(Array.isArray(memorialData.media), 'memorial should have media array');
+  assert.strictEqual(memorialData.media.length, 2, 'memorial should have 2 media items');
+  assert.ok(memorialData.media.find(m => m.type === 'image'), 'should find image media');
+  assert.ok(memorialData.media.find(m => m.type === 'video'), 'should find video media');
+
+  // test media without authentication should fail
+  r = await req({ hostname: 'localhost', port: 3000, path: `/api/memorials/${memorial.id}/media`, method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ url: 'https://example.com/test.jpg', type: 'image' }));
+  assert.strictEqual(r.statusCode, 401, 'upload media without auth should return 401');
 
   console.log('All tests passed');
   server.close();
