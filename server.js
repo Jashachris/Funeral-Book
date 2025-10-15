@@ -96,6 +96,24 @@ function verifyToken(token) {
 
 function serveStatic(req, res) {
   let p = req.url.split('?')[0];
+  
+  // Serve uploads directory
+  if (p.startsWith('/uploads/')) {
+    const file = path.join(__dirname, decodeURIComponent(p));
+    const uploadsDir = path.join(__dirname, 'uploads');
+    if (!file.startsWith(uploadsDir)) {
+      res.writeHead(403); res.end('Forbidden'); return;
+    }
+    fs.readFile(file, (err, data) => {
+      if (err) { res.writeHead(404); res.end('Not found'); return; }
+      const ext = path.extname(file).toLowerCase();
+      const map = { '.txt':'text/plain', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.pdf':'application/pdf' };
+      res.writeHead(200, { 'Content-Type': map[ext] || 'application/octet-stream' });
+      res.end(data);
+    });
+    return;
+  }
+  
   if (p === '/' ) p = '/index.html';
   const file = path.join(PUBLIC_DIR, decodeURIComponent(p));
   if (!file.startsWith(PUBLIC_DIR)) {
@@ -633,6 +651,153 @@ const server = http.createServer((req, res) => {
       broadcastEvent(room, 'message', msg, msg.senderId);
           return sendJson(res, msg, 201);
         } catch (e) { return sendJson(res, { error: 'invalid json' }, 400); }
+      });
+      return;
+    }
+
+    // ===== memorial endpoints =====
+    // GET /api/memorials
+    if (req.method === 'GET' && resource === 'memorials' && !maybeId) {
+      const db = readData();
+      sendJson(res, db.memorials || []);
+      return;
+    }
+
+    // GET /api/memorials/:id
+    if (req.method === 'GET' && resource === 'memorials' && maybeId) {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const db = readData();
+      const memorial = (db.memorials || []).find(m => m.id === id);
+      if (!memorial) return sendJson(res, { error: 'not found' }, 404);
+      return sendJson(res, memorial);
+    }
+
+    // POST /api/memorials
+    if (req.method === 'POST' && resource === 'memorials' && !maybeId) {
+      const user = getUserFromAuth(req);
+      if (!user) return sendJson(res, { error: 'unauthorized' }, 401);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj.name) return sendJson(res, { error: 'name required' }, 400);
+          const db = readData();
+          db.memorials = db.memorials || [];
+          const id = (db.memorials.reduce((m, r) => Math.max(m, r.id || 0), 0) || 0) + 1;
+          const memorial = { 
+            id, 
+            name: obj.name, 
+            bio: obj.bio || '', 
+            createdBy: user.id,
+            media: [],
+            createdAt: new Date().toISOString() 
+          };
+          db.memorials.push(memorial);
+          writeData(db);
+          sendJson(res, memorial, 201);
+        } catch (e) {
+          sendJson(res, { error: 'invalid json' }, 400);
+        }
+      });
+      return;
+    }
+
+    // POST /api/memorials/:id/media (multipart upload)
+    if (req.method === 'POST' && resource === 'memorials' && maybeId && req.url.includes('/media')) {
+      const memorialId = Number(maybeId);
+      if (!Number.isFinite(memorialId) || memorialId <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const user = getUserFromAuth(req);
+      if (!user) return sendJson(res, { error: 'unauthorized' }, 401);
+      
+      const contentType = req.headers['content-type'] || '';
+      if (!contentType.startsWith('multipart/form-data')) {
+        return sendJson(res, { error: 'content-type must be multipart/form-data' }, 415);
+      }
+      
+      // Parse boundary
+      const boundaryMatch = contentType.match(/boundary=([^;]+)/);
+      if (!boundaryMatch) return sendJson(res, { error: 'missing boundary' }, 400);
+      const boundary = '--' + boundaryMatch[1];
+      
+      let buffer = Buffer.alloc(0);
+      req.on('data', chunk => {
+        buffer = Buffer.concat([buffer, chunk]);
+        if (buffer.length > 5_000_000) { // 5MB limit
+          res.writeHead(413); 
+          res.end('File too large');
+          req.connection.destroy();
+        }
+      });
+      
+      req.on('end', () => {
+        try {
+          // Simple multipart parser
+          const parts = buffer.toString('binary').split(boundary);
+          let filename = null;
+          let fileData = null;
+          
+          for (const part of parts) {
+            const headersEndIdx = part.indexOf('\r\n\r\n');
+            if (headersEndIdx === -1) continue;
+            
+            const headers = part.substring(0, headersEndIdx);
+            const filenameMatch = headers.match(/filename="([^"]+)"/);
+            if (filenameMatch) {
+              filename = filenameMatch[1];
+              const body = part.substring(headersEndIdx + 4);
+              // Remove trailing boundary markers
+              const endIdx = body.lastIndexOf('\r\n');
+              fileData = Buffer.from(body.substring(0, endIdx), 'binary');
+            }
+          }
+          
+          if (!filename || !fileData) {
+            return sendJson(res, { error: 'no file uploaded' }, 400);
+          }
+          
+          // Save file
+          const uploadsDir = path.join(__dirname, 'uploads');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const timestamp = Date.now();
+          const savedFilename = `${timestamp}_${safeFilename}`;
+          const filepath = path.join(uploadsDir, savedFilename);
+          
+          fs.writeFileSync(filepath, fileData);
+          
+          // Update memorial with media reference
+          const db = readData();
+          db.memorials = db.memorials || [];
+          const memorial = db.memorials.find(m => m.id === memorialId);
+          if (!memorial) {
+            fs.unlinkSync(filepath); // cleanup
+            return sendJson(res, { error: 'memorial not found' }, 404);
+          }
+          
+          memorial.media = memorial.media || [];
+          const mediaId = memorial.media.length + 1;
+          const mediaItem = {
+            id: mediaId,
+            filename: savedFilename,
+            originalName: filename,
+            url: `/uploads/${savedFilename}`,
+            uploadedBy: user.id,
+            uploadedAt: new Date().toISOString()
+          };
+          memorial.media.push(mediaItem);
+          writeData(db);
+          
+          sendJson(res, mediaItem, 201);
+        } catch (e) {
+          console.error('Upload error:', e);
+          sendJson(res, { error: 'upload failed' }, 500);
+        }
       });
       return;
     }

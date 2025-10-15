@@ -21,7 +21,7 @@ function req(opts, body) {
 (async ()=>{
   // reset data
   // reset data.json for compatibility
-  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [] }));
+  fs.writeFileSync(dataFile, JSON.stringify({ records: [], users: [], posts: [], chat: [], sessions: [], live: {}, blocks: [], reports: [], followRequests: [], followers: [], memorials: [] }));
 
   // register user
   let r = await req({ hostname: 'localhost', port: 3000, path: '/api/users', method: 'POST', headers: { 'Content-Type':'application/json' } }, JSON.stringify({ username: 'bob', password: 'secret' }));
