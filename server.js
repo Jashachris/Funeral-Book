@@ -241,6 +241,101 @@ const server = http.createServer((req, res) => {
       return sendJson(res, removed);
     }
 
+    // ===== memorials endpoints =====
+    // GET /api/memorials
+    if (req.method === 'GET' && resource === 'memorials' && !maybeId) {
+      const db = readData();
+      sendJson(res, db.memorials);
+      return;
+    }
+
+    // GET /api/memorials/:id
+    if (req.method === 'GET' && resource === 'memorials' && maybeId) {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const db = readData();
+      const memorial = db.memorials.find(m => m.id === id);
+      if (!memorial) return sendJson(res, { error: 'not found' }, 404);
+      // attach media array
+      const media = db.media.filter(m => m.memorialId === id);
+      return sendJson(res, { ...memorial, media });
+    }
+
+    // POST /api/memorials
+    if (req.method === 'POST' && resource === 'memorials' && !maybeId) {
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      let body = '';
+      let length = 0;
+      req.on('data', chunk => {
+        length += chunk.length;
+        if (length > 1_000_000) { res.writeHead(413); res.end('Payload too large'); req.connection.destroy(); return; }
+        body += chunk;
+      });
+      req.on('end', () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj.name) return sendJson(res, { error: 'name required' }, 400);
+          const db = readData();
+          const id = (db.memorials.reduce((m, r) => Math.max(m, r.id || 0), 0) || 0) + 1;
+          const memorial = { id, name: obj.name, note: obj.note || '', createdAt: new Date().toISOString() };
+          db.memorials.push(memorial);
+          writeData(db);
+          sendJson(res, memorial, 201);
+        } catch (e) {
+          sendJson(res, { error: 'invalid json' }, 400);
+        }
+      });
+      return;
+    }
+
+    // POST /api/memorials/:id/media - upload media metadata
+    if (req.method === 'POST' && resource === 'memorials' && maybeId && req.url.includes('/media')) {
+      const memorialId = Number(maybeId);
+      if (!Number.isFinite(memorialId) || memorialId <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      
+      // Check if authenticated
+      const user = getUserFromAuth(req);
+      if (!user) return sendJson(res, { error: 'unauthorized' }, 401);
+
+      let body = '';
+      let length = 0;
+      req.on('data', chunk => {
+        length += chunk.length;
+        if (length > 1_000_000) { res.writeHead(413); res.end('Payload too large'); req.connection.destroy(); return; }
+        body += chunk;
+      });
+      req.on('end', () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj.url || !obj.type) return sendJson(res, { error: 'url and type required' }, 400);
+          
+          const db = readData();
+          const memorial = db.memorials.find(m => m.id === memorialId);
+          if (!memorial) return sendJson(res, { error: 'memorial not found' }, 404);
+          
+          const id = (db.media.reduce((m, r) => Math.max(m, r.id || 0), 0) || 0) + 1;
+          const media = {
+            id,
+            memorialId,
+            userId: user.id,
+            url: obj.url,
+            type: obj.type,
+            thumbnailUrl: obj.thumbnailUrl || null,
+            size: obj.size || 0,
+            external: obj.external || false,
+            createdAt: new Date().toISOString()
+          };
+          db.media.push(media);
+          writeData(db);
+          sendJson(res, media, 201);
+        } catch (e) {
+          sendJson(res, { error: 'invalid json' }, 400);
+        }
+      });
+      return;
+    }
+
     // ===== users endpoints =====
     if (resource === 'users' && req.method === 'POST' && !maybeId) {
       if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
