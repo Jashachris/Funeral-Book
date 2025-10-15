@@ -1,0 +1,8 @@
+node_modules
+data.json
+data.sqlite
+uploads
+*.md
+patent
+docs
+public

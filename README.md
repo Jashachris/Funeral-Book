@@ -19,17 +19,104 @@ The product plan includes:
 - Go-to-market and monetization strategy
 - 90-day detailed timeline
 
-Quick start
+## Development Setup
 
-1. Install Node.js (>=12). Then start the server:
+### Prerequisites
+- Node.js (>=12, recommended: >=18)
+- npm (comes with Node.js)
 
-	npm start
+### Quick Start
 
-2. Open http://localhost:3000 in your browser.
+1. Clone the repository and install dependencies:
 
-Run tests
+```bash
+git clone https://github.com/Jashachris/Funeral-Book.git
+cd Funeral-Book
+npm install
+```
 
-	npm test
+2. Seed the database with sample data (optional):
+
+```bash
+npm run seed
+```
+
+This creates sample records, a demo user, and a test post in `data.json`.
+
+3. Start the development server:
+
+```bash
+npm start
+```
+
+4. Open http://localhost:3000 in your browser.
+
+### Development Environment Configuration
+
+#### Local File Uploads
+The application uses a local `uploads/` directory for file storage in development:
+- Upload directory: `/uploads` (automatically created)
+- Files uploaded through the API are stored locally
+- The `uploads/` directory is git-ignored to prevent committing large files
+
+#### Debug Email/SMTP
+In development, emails are **not sent** but are logged to a local file:
+- Email log file: `email-debug.log`
+- All email attempts are captured with timestamp, recipient, subject, and body
+- Use the `emailLogger` module: `require('./lib/emailLogger').logEmail({ to, subject, body })`
+- The log file is git-ignored
+
+Example usage:
+```javascript
+const { logEmail } = require('./lib/emailLogger');
+
+logEmail({
+  to: 'user@example.com',
+  subject: 'Welcome to Funeral Book',
+  body: 'Thank you for joining...'
+});
+```
+
+### Available Scripts
+
+- `npm start` — Start the development server
+- `npm test` — Run tests
+- `npm run seed` — Populate database with sample data
+- `npm run lint` — Run ESLint to check code quality
+- `npm run lint:fix` — Auto-fix ESLint issues
+- `npm run format` — Format code with Prettier
+- `npm run format:check` — Check if code is formatted correctly
+- `npm run share` — Start and expose the app globally (ngrok/localtunnel)
+
+### Running Tests
+
+```bash
+npm test
+```
+
+Tests will:
+- Reset the database
+- Test user registration and login
+- Test record CRUD operations
+- Verify API endpoints
+
+### Code Quality
+
+The project uses ESLint and Prettier for code quality and formatting:
+
+```bash
+# Check for linting issues
+npm run lint
+
+# Auto-fix linting issues
+npm run lint:fix
+
+# Format all code
+npm run format
+
+# Check formatting
+npm run format:check
+```
 
 Files added in this scaffold:
 

@@ -6,7 +6,12 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test/test.js",
-    "share": "node scripts/share.js"
+    "share": "node scripts/share.js",
+    "seed": "node scripts/seed-data.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.js\"",
+    "format:check": "prettier --check \"**/*.js\""
   },
   "author": "",
   "license": "MIT",
@@ -19,5 +24,11 @@
     "lib": "lib",
     "test": "test"
   },
-  "keywords": []
+  "keywords": [],
+  "devDependencies": {
+    "eslint": "^9.37.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.4.0",
+    "prettier": "^3.6.2"
+  }
 }
