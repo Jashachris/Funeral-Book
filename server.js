@@ -289,6 +289,47 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // GET /api/users/:id - get user profile
+    if (resource === 'users' && req.method === 'GET' && maybeId && maybeId !== 'login') {
+      const id = Number(maybeId);
+      if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      const db = readData();
+      const user = db.users.find(u => u.id === id);
+      if (!user) return sendJson(res, { error: 'user not found' }, 404);
+      // Return public user info (exclude password and sensitive fields)
+      const publicUser = {
+        id: user.id,
+        username: user.username,
+        createdAt: user.createdAt,
+        private: user.private || false,
+        suspended: user.suspended || false
+      };
+      return sendJson(res, publicUser);
+    }
+
+    // POST /api/users/reset-password - reset password (requires authentication)
+    if (resource === 'users' && req.method === 'POST' && maybeId === 'reset-password') {
+      const authUser = getUserFromAuth(req);
+      if (!authUser) return sendJson(res, { error: 'unauthorized' }, 401);
+      if ((req.headers['content-type'] || '').indexOf('application/json') !== 0) return sendJson(res, { error: 'content-type must be application/json' }, 415);
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const obj = JSON.parse(body || '{}');
+          if (!obj.oldPassword || !obj.newPassword) return sendJson(res, { error: 'oldPassword and newPassword required' }, 400);
+          const db = readData();
+          const user = db.users.find(u => u.id === authUser.id);
+          if (!user || !verifyPassword(obj.oldPassword, user.password)) return sendJson(res, { error: 'invalid old password' }, 401);
+          // Update password
+          user.password = hashPassword(obj.newPassword);
+          writeData(db);
+          return sendJson(res, { success: true, message: 'password updated' });
+        } catch (e) { return sendJson(res, { error: 'invalid json' }, 400); }
+      });
+      return;
+    }
+
     // ===== posts endpoints =====
     if (resource === 'posts' && req.method === 'GET' && !maybeId) {
       const db = readData();
