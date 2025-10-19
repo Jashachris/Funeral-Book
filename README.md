@@ -131,11 +131,25 @@ This scaffold intentionally avoids external dependencies for simplicity. It's su
 
 API
 
+### Records (Memorials)
 - GET /api/records — list all records
 - GET /api/records/:id — get a single record by id
 - POST /api/records — create a record (JSON body, { name, note? })
 - PUT /api/records/:id — update fields (JSON body, { name?, note? })
 - DELETE /api/records/:id — delete a record
+
+### Media Uploads for Memorials
+- POST /api/records/:id/media — upload a media file for a memorial (multipart/form-data)
+- GET /api/records/:id/media — get all media files for a memorial
+
+Example upload:
+```bash
+# Upload a photo to memorial with ID 1
+curl -X POST -F "file=@photo.jpg" http://localhost:3000/api/records/1/media
+
+# Get all media for memorial with ID 1
+curl http://localhost:3000/api/records/1/media
+```
 
 Moderation & privacy
 
