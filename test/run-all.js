@@ -27,6 +27,10 @@ async function runAllTests() {
     const { runPasswordResetTests } = require('./integration/password-reset.test.js');
     await runPasswordResetTests();
     
+    // Run integration tests (memorial upload)
+    const { runMemorialUploadTests } = require('./integration/memorial-upload.test.js');
+    await runMemorialUploadTests();
+    
     // Close the current server before running original tests
     console.log('\n📝 Running Original Integration Tests...\n');
     server.close();
