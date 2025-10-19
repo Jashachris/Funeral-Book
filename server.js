@@ -5,7 +5,13 @@ const crypto = require('crypto');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const dbAdapter = require('./lib/dbAdapter');
+
+// Ensure uploads directory exists
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 // keep simple JSON-backed DB in data.json
 // delegate to adapter (sql.js WASM when available, else JSON file)
 async function initDbAdapter() {
@@ -146,10 +152,66 @@ function getUserFromAuth(req) {
   return user;
 }
 
+// Simple multipart/form-data parser for file uploads
+function parseMultipartData(req, callback) {
+  const contentType = req.headers['content-type'] || '';
+  const match = contentType.match(/boundary=(.+)/);
+  if (!match) return callback(new Error('No boundary found'));
+  
+  const boundary = '--' + match[1];
+  let data = Buffer.alloc(0);
+  
+  req.on('data', chunk => {
+    data = Buffer.concat([data, chunk]);
+    // Limit to 10MB
+    if (data.length > 10 * 1024 * 1024) {
+      req.connection.destroy();
+      callback(new Error('File too large'));
+    }
+  });
+  
+  req.on('end', () => {
+    try {
+      const parts = [];
+      const dataStr = data.toString('binary');
+      const sections = dataStr.split(boundary);
+      
+      for (let i = 1; i < sections.length - 1; i++) {
+        const section = sections[i];
+        const headerEnd = section.indexOf('\r\n\r\n');
+        if (headerEnd === -1) continue;
+        
+        const headers = section.substring(0, headerEnd);
+        const content = section.substring(headerEnd + 4, section.length - 2);
+        
+        // Parse Content-Disposition header
+        const nameMatch = headers.match(/name="([^"]+)"/);
+        const filenameMatch = headers.match(/filename="([^"]+)"/);
+        
+        if (filenameMatch) {
+          // This is a file
+          parts.push({
+            fieldname: nameMatch ? nameMatch[1] : 'file',
+            filename: filenameMatch[1],
+            data: Buffer.from(content, 'binary')
+          });
+        }
+      }
+      
+      callback(null, parts);
+    } catch (e) {
+      callback(e);
+    }
+  });
+  
+  req.on('error', callback);
+}
+
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/api/')) {
     // normalize path and extract id if present
-    const [_, api, resource, maybeId] = req.url.split('/'); // ['', 'api', 'records', '123']
+    const urlParts = req.url.split('?')[0].split('/'); // ['', 'api', 'records', '123', 'media']
+    const [_, api, resource, maybeId, subResource] = urlParts;
 
     // resource can be records, users, posts, chat, live
 
@@ -162,7 +224,7 @@ const server = http.createServer((req, res) => {
     }
 
     // GET /api/records/:id
-    if (req.method === 'GET' && resource === 'records' && maybeId) {
+    if (req.method === 'GET' && resource === 'records' && maybeId && !subResource) {
       const id = Number(maybeId);
       if (!Number.isFinite(id) || id <= 0) return sendJson(res, { error: 'invalid id' }, 400);
       const db = readData();
@@ -239,6 +301,76 @@ const server = http.createServer((req, res) => {
       const removed = db.records.splice(idx, 1)[0];
       writeData(db);
       return sendJson(res, removed);
+    }
+
+    // ===== media endpoints for records =====
+    // POST /api/records/:id/media - upload media file for a memorial
+    if (req.method === 'POST' && resource === 'records' && maybeId && subResource === 'media') {
+      const recordId = Number(maybeId);
+      if (!Number.isFinite(recordId) || recordId <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      
+      const db = readData();
+      const record = db.records.find(r => r.id === recordId);
+      if (!record) return sendJson(res, { error: 'record not found' }, 404);
+      
+      const contentType = req.headers['content-type'] || '';
+      if (!contentType.includes('multipart/form-data')) {
+        return sendJson(res, { error: 'content-type must be multipart/form-data' }, 415);
+      }
+      
+      parseMultipartData(req, (err, files) => {
+        if (err) {
+          return sendJson(res, { error: err.message }, 400);
+        }
+        
+        if (!files || files.length === 0) {
+          return sendJson(res, { error: 'no file uploaded' }, 400);
+        }
+        
+        const file = files[0];
+        const fileExt = path.extname(file.filename);
+        const fileId = crypto.randomBytes(16).toString('hex');
+        const fileName = `${fileId}${fileExt}`;
+        const filePath = path.join(UPLOADS_DIR, fileName);
+        
+        try {
+          fs.writeFileSync(filePath, file.data);
+          
+          // Store media reference in database
+          if (!db.media) db.media = [];
+          const mediaId = (db.media.reduce((m, med) => Math.max(m, med.id || 0), 0) || 0) + 1;
+          const media = {
+            id: mediaId,
+            recordId: recordId,
+            filename: file.filename,
+            storedFilename: fileName,
+            size: file.data.length,
+            mimetype: contentType.split(';')[0],
+            createdAt: new Date().toISOString()
+          };
+          
+          db.media.push(media);
+          writeData(db);
+          
+          return sendJson(res, { id: media.id, filename: media.filename, size: media.size }, 201);
+        } catch (e) {
+          return sendJson(res, { error: 'failed to save file' }, 500);
+        }
+      });
+      return;
+    }
+
+    // GET /api/records/:id/media - get media files for a memorial
+    if (req.method === 'GET' && resource === 'records' && maybeId && subResource === 'media') {
+      const recordId = Number(maybeId);
+      if (!Number.isFinite(recordId) || recordId <= 0) return sendJson(res, { error: 'invalid id' }, 400);
+      
+      const db = readData();
+      const record = db.records.find(r => r.id === recordId);
+      if (!record) return sendJson(res, { error: 'record not found' }, 404);
+      
+      const media = (db.media || []).filter(m => m.recordId === recordId);
+      return sendJson(res, media);
     }
 
     // ===== users endpoints =====

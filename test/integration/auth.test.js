@@ -24,7 +24,7 @@ async function runAuthTests() {
   // Reset data - both JSON and SQLite if present
   fs.writeFileSync(dataFile, JSON.stringify({ 
     records: [], users: [], posts: [], chat: [], sessions: [], 
-    live: {}, blocks: [], reports: [], followRequests: [], followers: [] 
+    live: {}, blocks: [], reports: [], followRequests: [], followers: [], media: [] 
   }));
   // Remove SQLite file if exists to ensure clean state
   if (fs.existsSync(sqliteFile)) {
